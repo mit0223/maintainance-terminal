@@ -20,6 +20,10 @@ Parameters:
   KeyPairName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: "EC2にログインするための既存のキーペア名 (パスワード取得に必要)。"
+  UniqueSuffix: # 新しいパラメータを追加
+    Type: String
+    Default: "-1" # デフォルト値は "-1"
+    Description: "リソース名の衝突を避けるための一意のサフィックス。"
 
 # ==============================================================================
 # リソース定義
@@ -99,14 +103,14 @@ Resources:
       # SSM Agentとの通信に必要なポリシーをアタッチ 
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-      RoleName: !Sub "${AWS::StackName}-SSM-Role"
+      RoleName: !Sub "${AWS::StackName}-SSM-Role${UniqueSuffix}"
       Path: "/"
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles: [ !Ref InstanceRole ]
-      InstanceProfileName: !Sub "${AWS::StackName}-SSM-Profile"
+      InstanceProfileName: !Sub "${AWS::StackName}-SSM-Profile${UniqueSuffix}"
 
   # ----------------------------------------------------------------------------
   # 2. セキュリティグループ (アウトバウンド 443 許可に必須)
