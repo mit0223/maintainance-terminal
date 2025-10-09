@@ -38,6 +38,7 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-VPC"
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   InternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -45,12 +46,14 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-IGW"
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   PublicSubnet:
     Type: AWS::EC2::Subnet
@@ -61,6 +64,7 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-PublicSubnet"
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
@@ -69,6 +73,7 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-PublicRouteTable"
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   PublicRoute:
     Type: AWS::EC2::Route
@@ -77,12 +82,14 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
     DependsOn: AttachGateway # IGWのアタッチ後にルートを設定
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   PublicSubnetRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref PublicSubnet
       RouteTableId: !Ref PublicRouteTable
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   # ----------------------------------------------------------------------------
   # 1. IAM ロールとポリシー (SSM通信に必須)
@@ -101,12 +108,14 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
       RoleName: !Sub "${AWS::StackName}-SSM-Role"
       Path: "/"
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
       Roles: [ !Ref InstanceRole ]
       InstanceProfileName: !Sub "${AWS::StackName}-SSM-Profile"
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   # ----------------------------------------------------------------------------
   # 2. セキュリティグループ (アウトバウンド 443 許可に必須)
@@ -131,6 +140,7 @@ Resources:
         # 一般的なインターネットアクセスも許可
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
   # ----------------------------------------------------------------------------
   # 3. Windows EC2 インスタンス (SSM AgentはAMIにプリインストールされていることが多い)
@@ -152,6 +162,7 @@ Resources:
           Value: !Sub "${AWS::StackName}-Windows-SSM-Host"
         - Key: SSM-Managed
           Value: True
+    DeletionPolicy: Retain # 削除ポリシーを追加
 
 # ==============================================================================
 # 出力値定義
