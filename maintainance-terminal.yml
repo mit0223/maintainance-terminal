@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS Systems Manager Fleet Managerで接続可能な最小構成のWindows EC2インスタンスを構築します。（VPC, サブネット, IGWを含む）"
+
+# ==============================================================================
+# パラメータ定義
+# ==============================================================================
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    Description: "EC2インスタンスのタイプ。t2.microを推奨。"
+  LatestWindowsAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: "/aws/service/ami-windows-latest/Windows_Server-2019-English-Full-Base"
+    Description: "使用するWindows Server AMIのSSMパラメータストアパス。デフォルトはWindows Server 2019。"
+  AdminUserName:
+    Type: String
+    Default: Administrator
+    Description: "リモートデスクトップ接続に使用する管理者ユーザー名。"
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: "EC2にログインするための既存のキーペア名 (パスワード取得に必要)。"
+
+# ==============================================================================
+# リソース定義
+# ==============================================================================
+Resources:
+
+  # ----------------------------------------------------------------------------
+  # 0. VPC, Internet Gateway, サブネット (SSM通信に必要なネットワーク環境)
+  # ----------------------------------------------------------------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-VPC"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-IGW"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: 'true' # パブリックIPを自動割り当て (SSM通信のため)
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicSubnet"
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicRouteTable"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+    DependsOn: AttachGateway # IGWのアタッチ後にルートを設定
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # ----------------------------------------------------------------------------
+  # 1. IAM ロールとポリシー (SSM通信に必須)
+  # ----------------------------------------------------------------------------
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: [ ec2.amazonaws.com ] }
+            Action: sts:AssumeRole
+      # SSM Agentとの通信に必要なポリシーをアタッチ (ManagedPolicyArnsに修正)
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      RoleName: !Sub "${AWS::StackName}-SSM-Role"
+      Path: "/"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [ !Ref InstanceRole ]
+      InstanceProfileName: !Sub "${AWS::StackName}-SSM-Profile"
+
+  # ----------------------------------------------------------------------------
+  # 2. セキュリティグループ (アウトバウンド 443 許可に必須)
+  # ----------------------------------------------------------------------------
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow outbound HTTPS (443) for SSM Agent communication."
+      VpcId: !Ref VPC # 新しいVPCを参照
+      SecurityGroupIngress:
+        # RDPを外部に公開しないため、インバウンドルールはSSM接続には必須ではない
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 10.0.0.0/16 # RDP接続が必要な場合はVPC内部のみに制限
+      SecurityGroupEgress:
+        # SSM エンドポイントへの接続に必要なアウトバウンド 443 を許可
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        # 一般的なインターネットアクセスも許可
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  # ----------------------------------------------------------------------------
+  # 3. Windows EC2 インスタンス (SSM AgentはAMIにプリインストールされていることが多い)
+  # ----------------------------------------------------------------------------
+  WindowsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestWindowsAmiId # SSM Parameter Storeから最新AMIを取得
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      IamInstanceProfile: !Ref InstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: "true" # パブリックサブネットに配置するため、パブリックIPを割り当てる
+          DeviceIndex: "0"
+          SubnetId: !Ref PublicSubnet # 新しいパブリックサブネットを参照
+          GroupSet: [ !Ref InstanceSecurityGroup ]
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Windows-SSM-Host"
+        - Key: SSM-Managed
+          Value: True
+
+# ==============================================================================
+# 出力値定義
+# ==============================================================================
+Outputs:
+  VpcId:
+    Description: "作成されたVPC ID"
+    Value: !Ref VPC
+  PublicSubnetId:
+    Description: "作成されたパブリックサブネット ID"
+    Value: !Ref PublicSubnet
+  InstanceId:
+    Description: "作成されたWindows EC2インスタンスID"
+    Value: !Ref WindowsInstance
+  FleetManagerConnectionLink:
+    Description: "フリートマネージャーのマネージドノードへの接続リンク"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/systems-manager/managed-instances/${WindowsInstance}/?region=${AWS::Region}"
